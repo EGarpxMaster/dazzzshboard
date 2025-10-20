@@ -1,133 +1,117 @@
 const express = require("express");
 const cors = require("cors");
-const { Pool } = require("pg");
+const mysql = require("mysql2");
 require("dotenv").config();
 
 const app = express();
-
-// Configurar CORS para permitir el frontend de Vercel
-const corsOptions = {
-    origin: [
-        'http://localhost:3000',
-        'http://localhost:5173',
-        'https://dazzzshboard-6zcximvje-egarpxmasters-projects.vercel.app',
-        /\.vercel\.app$/ // Permite todos los subdominios de vercel.app
-    ],
-    credentials: true,
-    optionsSuccessStatus: 200
-};
-
-app.use(cors(corsOptions));
+app.use(cors());
 app.use(express.json());
 
-// Configuración de la conexión a PostgreSQL (Neon)
-const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: {
-        rejectUnauthorized: false
-    }
+// Configuración de la conexión a MySQL
+const db = mysql.createConnection({
+    host: process.env.DB_HOST || "localhost",
+    user: process.env.DB_USER || "root",
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME || "dazzzshboard",
+    port: process.env.DB_PORT || 3306
 });
 
-// Probar conexión a la base de datos
-pool.query("SELECT NOW()", (err, res) => {
+// Conectar a la base de datos
+db.connect((err) => {
     if (err) {
-        console.error("Error conectando a PostgreSQL:", err);
+        console.error("Error conectando a MySQL:", err);
         return;
     }
-    console.log("Conexión exitosa a PostgreSQL (Neon):", res.rows[0].now);
+    console.log("Conexión exitosa a MySQL");
 });
 
 // Endpoint para obtener todos los datos
-app.get("/api/datos", async (req, res) => {
-    try {
-        const result = await pool.query("SELECT * FROM datos ORDER BY id");
-        res.json(result.rows);
-    } catch (err) {
-        console.error("Error en la consulta:", err);
-        res.status(500).json({ error: "Error al obtener datos" });
-    }
+app.get("/api/datos", (req, res) => {
+    db.query("SELECT * FROM datos ORDER BY id", (err, results) => {
+        if (err) {
+            console.error("Error en la consulta:", err);
+            res.status(500).json({ error: "Error al obtener datos" });
+            return;
+        }
+        res.json(results);
+    });
 });
 
 // Endpoint para obtener un dato específico
-app.get("/api/datos/:id", async (req, res) => {
-    try {
-        const { id } = req.params;
-        const result = await pool.query("SELECT * FROM datos WHERE id = $1", [id]);
-        if (result.rows.length === 0) {
+app.get("/api/datos/:id", (req, res) => {
+    const { id } = req.params;
+    db.query("SELECT * FROM datos WHERE id = ?", [id], (err, results) => {
+        if (err) {
+            res.status(500).json({ error: "Error al obtener el dato" });
+            return;
+        }
+        if (results.length === 0) {
             res.status(404).json({ error: "Dato no encontrado" });
             return;
         }
-        res.json(result.rows[0]);
-    } catch (err) {
-        console.error("Error al obtener el dato:", err);
-        res.status(500).json({ error: "Error al obtener el dato" });
-    }
+        res.json(results[0]);
+    });
 });
 
 // Endpoint para crear un nuevo dato
-app.post("/api/datos", async (req, res) => {
-    try {
-        const { nombre, valor } = req.body;
-        const result = await pool.query(
-            "INSERT INTO datos (nombre, valor) VALUES ($1, $2) RETURNING *",
-            [nombre, valor]
-        );
-        res.status(201).json({
-            ...result.rows[0],
-            message: "Dato creado exitosamente"
-        });
-    } catch (err) {
-        console.error("Error al crear el dato:", err);
-        res.status(500).json({ error: "Error al crear el dato" });
-    }
+app.post("/api/datos", (req, res) => {
+    const { nombre, valor } = req.body;
+    db.query(
+        "INSERT INTO datos (nombre, valor) VALUES (?, ?)",
+        [nombre, valor],
+        (err, result) => {
+            if (err) {
+                res.status(500).json({ error: "Error al crear el dato" });
+                return;
+            }
+            res.status(201).json({
+                id: result.insertId,
+                nombre,
+                valor,
+                message: "Dato creado exitosamente"
+            });
+        }
+    );
 });
 
 // Endpoint para actualizar un dato
-app.put("/api/datos/:id", async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { nombre, valor } = req.body;
-        const result = await pool.query(
-            "UPDATE datos SET nombre = $1, valor = $2 WHERE id = $3 RETURNING *",
-            [nombre, valor, id]
-        );
-        if (result.rows.length === 0) {
-            res.status(404).json({ error: "Dato no encontrado" });
-            return;
+app.put("/api/datos/:id", (req, res) => {
+    const { id } = req.params;
+    const { nombre, valor } = req.body;
+    db.query(
+        "UPDATE datos SET nombre = ?, valor = ? WHERE id = ?",
+        [nombre, valor, id],
+        (err, result) => {
+            if (err) {
+                res.status(500).json({ error: "Error al actualizar el dato" });
+                return;
+            }
+            if (result.affectedRows === 0) {
+                res.status(404).json({ error: "Dato no encontrado" });
+                return;
+            }
+            res.json({ message: "Dato actualizado exitosamente" });
         }
-        res.json({ 
-            ...result.rows[0],
-            message: "Dato actualizado exitosamente" 
-        });
-    } catch (err) {
-        console.error("Error al actualizar el dato:", err);
-        res.status(500).json({ error: "Error al actualizar el dato" });
-    }
+    );
 });
 
 // Endpoint para eliminar un dato
-app.delete("/api/datos/:id", async (req, res) => {
-    try {
-        const { id } = req.params;
-        const result = await pool.query("DELETE FROM datos WHERE id = $1 RETURNING *", [id]);
-        if (result.rows.length === 0) {
+app.delete("/api/datos/:id", (req, res) => {
+    const { id } = req.params;
+    db.query("DELETE FROM datos WHERE id = ?", [id], (err, result) => {
+        if (err) {
+            res.status(500).json({ error: "Error al eliminar el dato" });
+            return;
+        }
+        if (result.affectedRows === 0) {
             res.status(404).json({ error: "Dato no encontrado" });
             return;
         }
         res.json({ message: "Dato eliminado exitosamente" });
-    } catch (err) {
-        console.error("Error al eliminar el dato:", err);
-        res.status(500).json({ error: "Error al eliminar el dato" });
-    }
+    });
 });
 
-// Para desarrollo local
-if (process.env.NODE_ENV !== 'production') {
-    const PORT = process.env.PORT || 5000;
-    app.listen(PORT, () => {
-        console.log(`Servidor corriendo en puerto ${PORT}`);
-    });
-}
-
-// Exportar para Vercel (serverless)
-module.exports = app;
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+    console.log(`Servidor corriendo en puerto ${PORT}`);
+});
