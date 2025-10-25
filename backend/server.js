@@ -1,117 +1,134 @@
-const express = require("express");
-const cors = require("cors");
-const mysql = require("mysql2");
-require("dotenv").config();
+import express from 'express';
+import cors from 'cors';
+import { createClient } from '@supabase/supabase-js';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const app = express();
-app.use(cors());
+const PORT = process.env.PORT || 5000;
+
+// Configurar Supabase
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+);
+
+// Configurar CORS para permitir acceso desde GitHub Pages
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:4173',
+  'https://egarpxmaster.github.io'
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // Permitir requests sin origin (como Postman) o de orígenes permitidos
+    if (!origin || allowedOrigins.some(allowed => origin.startsWith(allowed))) {
+      callback(null, true);
+    } else {
+      callback(null, true); // En producción, considera ser más estricto
+    }
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  credentials: true
+}));
 app.use(express.json());
 
-// Configuración de la conexión a MySQL
-const db = mysql.createConnection({
-    host: process.env.DB_HOST || "localhost",
-    user: process.env.DB_USER || "root",
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME || "dazzzshboard",
-    port: process.env.DB_PORT || 3306
+// Health check
+app.get('/', (req, res) => {
+  res.json({ message: 'API funcionando con Supabase' });
 });
 
-// Conectar a la base de datos
-db.connect((err) => {
-    if (err) {
-        console.error("Error conectando a MySQL:", err);
-        return;
+// Obtener todos los datos
+app.get('/api/datos', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('datos')
+      .select('*')
+      .order('id', { ascending: true });
+    
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error('Error al obtener datos:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Crear nuevo dato
+app.post('/api/datos', async (req, res) => {
+  try {
+    const { nombre, valor } = req.body;
+    
+    if (!nombre || valor === undefined) {
+      return res.status(400).json({ error: 'Nombre y valor son requeridos' });
     }
-    console.log("Conexión exitosa a MySQL");
+
+    const { data, error } = await supabase
+      .from('datos')
+      .insert([{ nombre, valor }])
+      .select()
+      .single();
+    
+    if (error) throw error;
+    res.status(201).json(data);
+  } catch (error) {
+    console.error('Error al crear dato:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
-// Endpoint para obtener todos los datos
-app.get("/api/datos", (req, res) => {
-    db.query("SELECT * FROM datos ORDER BY id", (err, results) => {
-        if (err) {
-            console.error("Error en la consulta:", err);
-            res.status(500).json({ error: "Error al obtener datos" });
-            return;
-        }
-        res.json(results);
-    });
-});
-
-// Endpoint para obtener un dato específico
-app.get("/api/datos/:id", (req, res) => {
-    const { id } = req.params;
-    db.query("SELECT * FROM datos WHERE id = ?", [id], (err, results) => {
-        if (err) {
-            res.status(500).json({ error: "Error al obtener el dato" });
-            return;
-        }
-        if (results.length === 0) {
-            res.status(404).json({ error: "Dato no encontrado" });
-            return;
-        }
-        res.json(results[0]);
-    });
-});
-
-// Endpoint para crear un nuevo dato
-app.post("/api/datos", (req, res) => {
-    const { nombre, valor } = req.body;
-    db.query(
-        "INSERT INTO datos (nombre, valor) VALUES (?, ?)",
-        [nombre, valor],
-        (err, result) => {
-            if (err) {
-                res.status(500).json({ error: "Error al crear el dato" });
-                return;
-            }
-            res.status(201).json({
-                id: result.insertId,
-                nombre,
-                valor,
-                message: "Dato creado exitosamente"
-            });
-        }
-    );
-});
-
-// Endpoint para actualizar un dato
-app.put("/api/datos/:id", (req, res) => {
+// Actualizar dato
+app.put('/api/datos/:id', async (req, res) => {
+  try {
     const { id } = req.params;
     const { nombre, valor } = req.body;
-    db.query(
-        "UPDATE datos SET nombre = ?, valor = ? WHERE id = ?",
-        [nombre, valor, id],
-        (err, result) => {
-            if (err) {
-                res.status(500).json({ error: "Error al actualizar el dato" });
-                return;
-            }
-            if (result.affectedRows === 0) {
-                res.status(404).json({ error: "Dato no encontrado" });
-                return;
-            }
-            res.json({ message: "Dato actualizado exitosamente" });
-        }
-    );
+    
+    const { data, error } = await supabase
+      .from('datos')
+      .update({ 
+        nombre, 
+        valor, 
+        updated_at: new Date().toISOString() 
+      })
+      .eq('id', id)
+      .select()
+      .single();
+    
+    if (error) throw error;
+    
+    if (!data) {
+      return res.status(404).json({ error: 'Dato no encontrado' });
+    }
+    
+    res.json(data);
+  } catch (error) {
+    console.error('Error al actualizar dato:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
-// Endpoint para eliminar un dato
-app.delete("/api/datos/:id", (req, res) => {
+// Eliminar dato
+app.delete('/api/datos/:id', async (req, res) => {
+  try {
     const { id } = req.params;
-    db.query("DELETE FROM datos WHERE id = ?", [id], (err, result) => {
-        if (err) {
-            res.status(500).json({ error: "Error al eliminar el dato" });
-            return;
-        }
-        if (result.affectedRows === 0) {
-            res.status(404).json({ error: "Dato no encontrado" });
-            return;
-        }
-        res.json({ message: "Dato eliminado exitosamente" });
-    });
+    
+    const { error } = await supabase
+      .from('datos')
+      .delete()
+      .eq('id', id);
+    
+    if (error) throw error;
+    res.status(204).send();
+  } catch (error) {
+    console.error('Error al eliminar dato:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
-const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-    console.log(`Servidor corriendo en puerto ${PORT}`);
+  console.log(`✅ Servidor corriendo en puerto ${PORT}`);
+  console.log(`📊 Conectado a Supabase`);
 });
